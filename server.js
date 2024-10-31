@@ -12,58 +12,79 @@ const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
 
-connectDB(); // Veritabanına bağlantıyı
 
-// Set static folder
+
+
+connectDB();
+
+// Statik dosya ayarı
 app.use(express.static(path.join(__dirname, 'public')));
 
 const botName = 'NightChat Bot';
 
-io.on('connection', async (socket) => {
+io.on('connection', (socket) => {
+  // Kullanıcı oda ile katılınca
   socket.on('joinRoom', async ({ username, room }) => {
+    if (!username || !room) {
+      socket.emit('message', formatMessage(botName, "Geçersiz oda veya kullanıcı adı."));
+      return;
+    }
+
     const user = userJoin(socket.id, username, room);
     socket.join(user.room);
 
-    // Welcome current user
-    socket.emit('message', formatMessage(botName, `${user.username} NightChat'e hoşgeldin`));
+    // Yeni kullanıcıya hoş geldin mesajı
+    socket.emit('message', formatMessage(botName, `${user.username} NightChat'e hoşgeldin!`));
 
-    // Broadcast when a user connects
-    socket.broadcast.to(user.room).emit('message', formatMessage(botName, `${user.username} adlı kullanıcı giriş yaptı`));
+    // Odaya bağlanan diğer kullanıcılara bildirim gönder
+    socket.broadcast.to(user.room).emit('message', formatMessage(botName, `${user.username} adlı kullanıcı giriş yaptı.`));
 
-    // Send user and room info
+    // Kullanıcı ve oda bilgilerini gönder
     io.to(user.room).emit('roomUsers', {
       room: user.room,
       users: getRoomUsers(user.room),
       activeUserCount: getActiveUserCount(),
     });
-     //deneme2
-  socket.on('yaziyor', function (data) {
-    io.to(user.room).emit('yaziyor', data);
+
+    // Önceki mesajları al ve kullanıcıya gönder
+    try {
+      const messages = await getMessagesByRoom(user.room);
+      messages.forEach((message) => {
+        socket.emit('message', formatMessage(message.username, message.text, message.time));
+      });
+    } catch (error) {
+      console.error("Mesajlar alınırken hata oluştu:", error);
+    }
   });
 
-
-    // Get and emit previous messages
-    const messages = await getMessagesByRoom(user.room);
-    messages.forEach((message) => {
-      socket.emit('message', formatMessage(message.username, message.text, message.time));
-    });
-  });
- 
-
+  // Kullanıcı mesaj gönderdiğinde
   socket.on('chatMessage', async (msg) => {
     const user = getCurrentUser(socket.id);
+    if (!user) return;
+
     io.to(user.room).emit('message', formatMessage(user.username, msg));
 
-    // Emit "typing" event
-   
-
-    await saveMessage(user.username, msg, user.room);
+    // Mesajı veritabanına kaydet
+    try {
+      await saveMessage(user.username, msg, user.room);
+    } catch (error) {
+      console.error("Mesaj kaydedilirken hata oluştu:", error);
+    }
   });
 
+  // Yazıyor etkinliği
+  socket.on('yaziyor', (data) => {
+    const user = getCurrentUser(socket.id);
+    if (user) {
+      io.to(user.room).emit('yaziyor', data);
+    }
+  });
+
+  // Kullanıcı bağlantıyı kesince
   socket.on('disconnect', () => {
     const user = userLeave(socket.id);
     if (user) {
-      io.to(user.room).emit('message', formatMessage(botName, `${user.username} adli kullanici sohbetten ayrıldı`));
+      io.to(user.room).emit('message', formatMessage(botName, `${user.username} adlı kullanıcı sohbetten ayrıldı.`));
       io.to(user.room).emit('roomUsers', {
         room: user.room,
         users: getRoomUsers(user.room),
@@ -73,5 +94,6 @@ io.on('connection', async (socket) => {
   });
 });
 
-const PORT = 3000 || process.env.PORT;
-server.listen(PORT, () => console.log(`3000 PORT DİNLENİYOR ${PORT}`));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server ${PORT} portunda çalışıyor`));
+
